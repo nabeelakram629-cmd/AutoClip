@@ -264,6 +264,11 @@ def extract_json_object(raw: str) -> dict[str, Any]:
     if not text:
         raise ValueError("The provider returned an empty response.")
 
+    # Qwen3 / reasoning models wrap the answer in a think block.
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+    if not text:
+        raise ValueError("The provider returned only a thinking trace, no JSON.")
+
     if match := _JSON_FENCE.search(text):
         text = match.group(1).strip()
 

@@ -39,6 +39,8 @@ dependencies = [
   "yt-dlp>=2026.1.1",
   # Transcription
   "faster-whisper>=1.1",
+  # CTranslate2 4.5+ ACCESS_VIOLATEs on some Windows CPUs when loading Whisper.
+  "ctranslate2>=4.4,<4.5; sys_platform == 'win32'",
   # Reframe
   "mediapipe>=0.10.14",
   # No [opencv] extra: scenedetect 0.7 dropped it and now depends on

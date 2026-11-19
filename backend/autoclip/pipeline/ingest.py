@@ -122,7 +122,14 @@ def ingest_youtube(
 
     try:
         with yt_dlp.YoutubeDL(options) as ydl:
+            # Probe first so currently-live streams fail fast with a clear
+            # message instead of hanging on an unbounded download.
+            metadata = ydl.extract_info(url, download=False)
+            _reject_active_livestream(metadata)
             metadata = ydl.extract_info(url, download=True)
+    except IngestError:
+        shutil.rmtree(target_dir, ignore_errors=True)
+        raise
     except yt_dlp.utils.DownloadError as exc:
         shutil.rmtree(target_dir, ignore_errors=True)
         raise _translate_ytdlp_error(exc, settings) from exc
@@ -151,6 +158,34 @@ def ingest_youtube(
         fps=info.fps,
         has_audio=info.has_audio,
         has_video=info.has_video,
+    )
+
+
+def _reject_active_livestream(metadata: dict | None) -> None:
+    """Refuse streams that are still live — AutoClip needs a finished file."""
+    if not metadata:
+        return
+    is_live = bool(metadata.get("is_live"))
+    live_status = (metadata.get("live_status") or "").lower()
+    if not is_live and live_status not in {"is_live", "is_upcoming"}:
+        return
+
+    title = metadata.get("title") or "this livestream"
+    if live_status == "is_upcoming":
+        raise IngestError(
+            f"“{title}” has not started yet.",
+            hint=(
+                "AutoClip can only process finished videos. Wait until the stream "
+                "ends, then paste the same link again (or upload a recording)."
+            ),
+        )
+    raise IngestError(
+        f"“{title}” is still live.",
+        hint=(
+            "AutoClip cannot clip an ongoing livestream — there is no fixed "
+            "duration yet. Wait until the stream ends, then paste the same link "
+            "again (YouTube keeps the VOD), or upload a local recording."
+        ),
     )
 
 
@@ -187,6 +222,15 @@ def _translate_ytdlp_error(exc: Exception, settings: IngestSettings) -> IngestEr
         return IngestError(
             "This content is DRM-protected.",
             hint="AutoClip does not and will not circumvent DRM.",
+        )
+    if "requested format is not available" in message:
+        return IngestError(
+            "yt-dlp could not find a downloadable format for this video.",
+            hint=(
+                "Ended livestreams often only offer HLS streams. Update yt-dlp "
+                "with `autoclip update-ytdlp`, or upload a local recording instead.\n\n"
+                f"Original error: {exc}"
+            ),
         )
 
     return IngestError(

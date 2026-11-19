@@ -47,6 +47,8 @@ class OllamaProvider(LLMProvider):
 
     async def _complete(self, system: str, user: str, config: DetectionConfig) -> str:
         if not self.model:
+            self.model = await self._default_model()
+        if not self.model:
             raise ProviderError(
                 "No Ollama model is selected.",
                 provider=self.name,
@@ -61,6 +63,9 @@ class OllamaProvider(LLMProvider):
             # Ollama's JSON mode constrains decoding to valid JSON, which is the
             # single biggest reliability win for small local models.
             "format": "json",
+            # Qwen3 (and similar) emit a <think> block that wrecks JSON parsing
+            # unless thinking is turned off.
+            "think": False,
             "options": {"temperature": config.temperature},
         }
 
@@ -118,6 +123,19 @@ class OllamaProvider(LLMProvider):
         return ProviderStatus(
             name=self.name, available=True, detail=f"{len(models)} model(s)", models=sorted(models)
         )
+
+    async def _default_model(self) -> str:
+        """Pick a pulled model when settings left the name blank."""
+        status = await self.health_check()
+        if not status.models:
+            return ""
+        names = status.models
+        for preferred in RECOMMENDED_MODELS:
+            if preferred in names:
+                log.info("No Ollama model configured; using %s.", preferred)
+                return preferred
+        log.info("No Ollama model configured; using %s.", names[0])
+        return names[0]
 
 
 def _translate_status(exc: httpx.HTTPStatusError, provider: str, model: str) -> ProviderError:

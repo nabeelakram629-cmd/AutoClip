@@ -156,6 +156,29 @@ export function Ingest() {
         </section>
       </div>
 
+      {busy && (
+        <div className="mt-10 max-w-3xl">
+          <div className="mb-2 flex items-baseline justify-between gap-4">
+            <p className="text-sm text-ink-200">
+              {busy === 'url' ? 'Downloading from YouTube…' : 'Uploading file…'}
+            </p>
+            <p className="numeric text-xs text-ink-500">working</p>
+          </div>
+          <div
+            className="h-2.5 w-full overflow-hidden rounded-sm bg-ink-800"
+            role="progressbar"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-label={busy === 'url' ? 'Download progress' : 'Upload progress'}
+          >
+            <div className="h-full rounded-sm bg-sodium-500 progress-indeterminate" />
+          </div>
+          <p className="mt-2 text-xs text-ink-500">
+            You’ll see stage-by-stage progress once processing starts.
+          </p>
+        </div>
+      )}
+
       {error && (
         <div className="mt-10 max-w-3xl">
           <ErrorNote error={error} onDismiss={() => setError(null)} />

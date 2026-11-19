@@ -35,7 +35,16 @@ export function JobProgress() {
   }
 
   const activeIndex = STAGES.findIndex((s) => s.key === job.current_stage)
-  const percent = Math.round((progress?.overall ?? job.progress) * 100)
+  const overall = Math.max(0, Math.min(1, progress?.overall ?? job.progress ?? 0))
+  const percent = Math.round(overall * 100)
+  const stageFraction =
+    job.status === 'done'
+      ? 1
+      : Math.max(0, Math.min(1, progress?.stageProgress ?? 0))
+  const activeLabel =
+    progress?.message ||
+    (activeIndex >= 0 ? STAGES[activeIndex].note : null) ||
+    (job.status === 'queued' ? 'Waiting in queue…' : 'Working…')
 
   const cancel = async () => {
     setCancelling(true)
@@ -55,6 +64,11 @@ export function JobProgress() {
       await api.retryJob(job.id)
       window.location.reload()
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      if (/running|queued/i.test(message)) {
+        window.location.reload()
+        return
+      }
       setActionError(err as Error)
     }
   }
@@ -99,7 +113,7 @@ export function JobProgress() {
         </div>
       </div>
 
-      {job.error && (
+      {job.error && job.status !== 'running' && job.status !== 'queued' && (
         <div className="mt-8 max-w-3xl">
           <ErrorNote error={new Error(job.error)} />
           <p className="mt-3 text-xs text-ink-500">
@@ -113,6 +127,32 @@ export function JobProgress() {
           <ErrorNote error={actionError} onDismiss={() => setActionError(null)} />
         </div>
       )}
+
+      {/* Overall progress — the primary “how far along am I?” signal. */}
+      <div className="mt-10 max-w-3xl">
+        <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+          <p className="text-sm text-ink-200">{activeLabel}</p>
+          <p className="numeric text-xs text-ink-500">
+            {job.status === 'done' ? 'Complete' : `${percent}% overall`}
+          </p>
+        </div>
+        <div
+          className="h-2.5 w-full overflow-hidden rounded-sm bg-ink-800"
+          role="progressbar"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={percent}
+          aria-label="Overall job progress"
+        >
+          <div
+            className={[
+              'h-full rounded-sm bg-sodium-500 transition-[width] duration-500 ease-[cubic-bezier(0.16,1,0.3,1)]',
+              job.status === 'running' && percent < 3 ? 'progress-pulse' : '',
+            ].join(' ')}
+            style={{ width: `${Math.max(job.status === 'running' ? 2 : 0, percent)}%` }}
+          />
+        </div>
+      </div>
 
       <ol className="mt-12 max-w-3xl">
         {STAGES.map((stage, index) => {
@@ -132,7 +172,8 @@ export function JobProgress() {
                   : 'pending'
 
           const fraction =
-            state === 'done' ? 1 : state === 'active' ? (progress?.stageProgress ?? 0) : 0
+            state === 'done' ? 1 : state === 'active' ? stageFraction : 0
+          const stagePercent = Math.round(fraction * 100)
 
           return (
             <li
@@ -164,6 +205,9 @@ export function JobProgress() {
                     ].join(' ')}
                   >
                     {stage.label}
+                    {state === 'active' && (
+                      <span className="numeric ml-2 text-xs text-sodium-500">{stagePercent}%</span>
+                    )}
                   </span>
                   <span
                     className={`text-xs ${state === 'stopped' ? 'text-signal-bad' : 'text-ink-500'}`}
@@ -178,12 +222,16 @@ export function JobProgress() {
                   </span>
                 </div>
 
-                {/* A hairline that fills. No track chrome — the rule below the
-                    row already provides the container. */}
-                <div className="mt-3 h-px w-full bg-ink-800">
+                <div className="mt-3 h-1.5 w-full overflow-hidden rounded-sm bg-ink-800">
                   <div
-                    className="h-px origin-left bg-sodium-500 transition-transform duration-500 ease-[cubic-bezier(0.16,1,0.3,1)]"
-                    style={{ transform: `scaleX(${fraction})` }}
+                    className={[
+                      'h-full rounded-sm transition-[width] duration-500 ease-[cubic-bezier(0.16,1,0.3,1)]',
+                      state === 'stopped' ? 'bg-signal-bad' : 'bg-sodium-500',
+                      state === 'active' && stagePercent < 3 ? 'progress-pulse' : '',
+                    ].join(' ')}
+                    style={{
+                      width: `${state === 'active' ? Math.max(2, stagePercent) : stagePercent}%`,
+                    }}
                   />
                 </div>
               </div>

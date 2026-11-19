@@ -35,6 +35,10 @@ DEDUPE_IOU = 0.4
 HOSTED_CONCURRENCY = 3
 LOCAL_CONCURRENCY = 1
 
+#: Sub-7B Ollama tags. They usually return ``{"clips": []}`` or think forever;
+#: speech-window fallback is more useful than waiting.
+_SMALL_OLLAMA_TAGS = ("1b", "1.5b", "2b", "3b", "4b")
+
 
 class HighlightError(RuntimeError):
     """Highlight detection produced nothing usable."""
@@ -135,6 +139,21 @@ async def detect(
 
     log.info("Detecting highlights across %d window(s) with %s.", len(windows), provider.name)
 
+    if _small_local_model(provider):
+        log.info(
+            "Skipping %s/%s for clip picking — using speech windows instead.",
+            provider.name,
+            provider.model,
+        )
+        candidates = heuristic_candidates(transcript, config)
+        if not candidates:
+            raise HighlightError(
+                "No clips were found. This can mean the video genuinely has no "
+                "self-contained highlights, or that the model struggled with the "
+                "transcript — try a larger model or a different provider."
+            )
+        return build_clips(transcript, candidates, config, job_id=job_id, silences=silences or [])
+
     concurrency = LOCAL_CONCURRENCY if provider.name == "ollama" else HOSTED_CONCURRENCY
     semaphore = asyncio.Semaphore(concurrency)
     completed = 0
@@ -165,6 +184,12 @@ async def detect(
     candidates = [c for group in results for c in group]
 
     if not candidates:
+        log.warning(
+            "Provider returned no highlights; falling back to evenly spaced speech segments."
+        )
+        candidates = heuristic_candidates(transcript, config)
+
+    if not candidates:
         raise HighlightError(
             "No clips were found. This can mean the video genuinely has no "
             "self-contained highlights, or that the model struggled with the "
@@ -173,6 +198,62 @@ async def detect(
 
     log.info("Providers proposed %d raw candidates.", len(candidates))
     return build_clips(transcript, candidates, config, job_id=job_id, silences=silences or [])
+
+
+def _small_local_model(provider: LLMProvider) -> bool:
+    if provider.name != "ollama":
+        return False
+    model = (provider.model or "").lower()
+    return any(tag in model for tag in _SMALL_OLLAMA_TAGS)
+
+
+def heuristic_candidates(
+    transcript: Transcript, config: DetectionConfig
+) -> list[ClipCandidate]:
+    """Build clip candidates by slicing speech into target-length windows.
+
+    Used when the LLM returns nothing — typical of small local models and of
+    transcripts that don't look like a podcast. Better to export watchable
+    segments than to fail the whole job.
+    """
+    if not transcript.words:
+        return []
+
+    target = max(config.min_duration_s, min(45.0, config.max_duration_s))
+    candidates: list[ClipCandidate] = []
+    start_i = 0
+
+    while start_i < len(transcript.words) and len(candidates) < max(config.max_clips, 1):
+        start_t = transcript.words[start_i].start
+        end_i = start_i
+        while (
+            end_i + 1 < len(transcript.words)
+            and transcript.words[end_i + 1].end - start_t < target
+        ):
+            end_i += 1
+
+        duration = transcript.words[end_i].end - start_t
+        if duration >= min(config.min_duration_s, 15.0):
+            preview = transcript.text_between(
+                start_i, min(start_i + 8, end_i)
+            ).strip()
+            candidates.append(
+                ClipCandidate(
+                    start_word_index=start_i,
+                    end_word_index=end_i,
+                    title=(preview[:60] or f"Clip {len(candidates) + 1}"),
+                    hook=preview[:80],
+                    score=max(40, 70 - len(candidates) * 3),
+                    reason="Automatic segment — the language model did not pick a highlight.",
+                )
+            )
+
+        next_i = end_i + 1
+        if next_i <= start_i:
+            break
+        start_i = next_i
+
+    return candidates
 
 
 def build_clips(

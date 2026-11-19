@@ -1,4 +1,4 @@
-"""In-process job queue.
+"""In-process job queue that runs each pipeline job in a subprocess.
 
 One video is processed at a time, FIFO. That's a deliberate constraint rather
 than a limitation: transcription, face detection, and encoding each want the
@@ -8,6 +8,10 @@ than running them in sequence.
 The queue is durable because it lives in SQLite — a crash mid-job leaves the row
 as ``running``, and startup requeues it so the resumable stages pick up where
 they left off.
+
+Jobs run in a child process so a native crash in Whisper/CTranslate2 (common on
+some Windows setups as ACCESS_VIOLATION) fails the job instead of killing the
+web server.
 """
 
 from __future__ import annotations
@@ -15,14 +19,19 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 
+from .. import paths
 from ..db import store
-from ..db.models import Job
-from ..pipeline.runner import JobCancelled, PipelineRunner
-from .events import Event, broker, progress_event
+from ..db.models import Job, utcnow
+from .events import Event, broker
 
 log = logging.getLogger(__name__)
+
+#: Windows STATUS_ACCESS_VIOLATION — what CTranslate2 often dies with here.
+_ACCESS_VIOLATION = 0xC0000005
 
 
 @dataclass
@@ -45,6 +54,7 @@ class JobQueue:
         self._running_job_id: str | None = None
         self._cancel_requested: set[str] = set()
         self._stopping = False
+        self._worker_proc: asyncio.subprocess.Process | None = None
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -59,6 +69,9 @@ class JobQueue:
     async def stop(self) -> None:
         self._stopping = True
         self.notify()
+        if self._worker_proc is not None and self._worker_proc.returncode is None:
+            with contextlib.suppress(ProcessLookupError):
+                self._worker_proc.kill()
         if self._task is not None:
             self._task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -90,9 +103,13 @@ class JobQueue:
             return False
 
         self._cancel_requested.add(job_id)
+        _cancel_flag(job_id).write_text("1", encoding="utf-8")
         if job.status == "queued":
             store.update_job(job_id, status="cancelled")
             broker.publish(Event(type="cancelled", job_id=job_id))
+        elif self._running_job_id == job_id and self._worker_proc is not None:
+            with contextlib.suppress(ProcessLookupError):
+                self._worker_proc.kill()
         return True
 
     def is_cancelled(self, job_id: str) -> bool:
@@ -128,41 +145,109 @@ class JobQueue:
 
         self._running_job_id = job.id
         broker.publish(Event(type="started", job_id=job.id))
-        log.info("Starting job %s (%s).", job.id, source.title)
+        log.info("Starting job %s (%s) in a subprocess.", job.id, source.title)
 
-        def on_progress(event) -> None:
-            broker.publish(progress_event(job.id, event))
+        paths.job_work_dir(job.id).mkdir(parents=True, exist_ok=True)
+        _cancel_flag(job.id).unlink(missing_ok=True)
 
-        runner = PipelineRunner(
-            job,
-            source,
-            on_progress=on_progress,
-            is_cancelled=lambda: self.is_cancelled(job.id),
-        )
+        last_stage = job.current_stage
+        last_progress = job.progress
 
         try:
-            clips = await asyncio.to_thread(_run_blocking, runner)
-        except JobCancelled:
-            broker.publish(Event(type="cancelled", job_id=job.id))
-            log.info("Job %s cancelled.", job.id)
-        except Exception as exc:
-            broker.publish(Event(type="failed", job_id=job.id, data={"error": str(exc)}))
-            log.exception("Job %s failed.", job.id)
-        else:
-            broker.publish(Event(type="done", job_id=job.id, data={"clip_count": len(clips)}))
-            log.info("Job %s finished with %d clips.", job.id, len(clips))
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable,
+                "-m",
+                "autoclip.jobs.worker",
+                job.id,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+            self._worker_proc = proc
+
+            async def pump_output() -> None:
+                assert proc.stdout is not None
+                while line := await proc.stdout.readline():
+                    log.info("[job %s] %s", job.id, line.decode("utf-8", "replace").rstrip())
+
+            output_task = asyncio.create_task(pump_output())
+
+            while proc.returncode is None:
+                current = await asyncio.to_thread(store.get_job, job.id)
+                if current is not None and (
+                    current.current_stage != last_stage or current.progress != last_progress
+                ):
+                    last_stage = current.current_stage
+                    last_progress = current.progress
+                    broker.publish(
+                        Event(
+                            type="progress",
+                            job_id=job.id,
+                            data={
+                                "stage": current.current_stage or "",
+                                "stage_progress": 0.0,
+                                "overall": current.progress,
+                                "message": current.current_stage or "",
+                            },
+                        )
+                    )
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=0.5)
+                except TimeoutError:
+                    continue
+
+            await output_task
+            code = proc.returncode or 0
+            current = await asyncio.to_thread(store.get_job, job.id)
+
+            if job.id in self._cancel_requested or (current and current.status == "cancelled"):
+                if current is None or current.status != "cancelled":
+                    await asyncio.to_thread(
+                        store.update_job,
+                        job.id,
+                        status="cancelled",
+                        finished_at=utcnow(),
+                    )
+                broker.publish(Event(type="cancelled", job_id=job.id))
+                log.info("Job %s cancelled.", job.id)
+            elif current is not None and current.status == "done":
+                broker.publish(Event(type="done", job_id=job.id))
+                log.info("Job %s finished.", job.id)
+            elif current is not None and current.status == "failed":
+                broker.publish(
+                    Event(type="failed", job_id=job.id, data={"error": current.error or ""})
+                )
+                log.error("Job %s failed: %s", job.id, current.error)
+            else:
+                error = _explain_worker_exit(code)
+                await asyncio.to_thread(
+                    store.update_job,
+                    job.id,
+                    status="failed",
+                    error=error,
+                    finished_at=utcnow(),
+                )
+                broker.publish(Event(type="failed", job_id=job.id, data={"error": error}))
+                log.error("Job %s aborted (exit %s): %s", job.id, code, error)
         finally:
+            self._worker_proc = None
             self._running_job_id = None
             self._cancel_requested.discard(job.id)
+            _cancel_flag(job.id).unlink(missing_ok=True)
 
 
-def _run_blocking(runner: PipelineRunner):
-    """Run the pipeline in a worker thread with its own event loop.
+def _cancel_flag(job_id: str) -> Path:
+    return paths.job_work_dir(job_id) / "cancel.flag"
 
-    The pipeline is overwhelmingly blocking work with one async stage, so it
-    gets a private loop rather than competing for the server's.
-    """
-    return asyncio.run(runner.run())
+
+def _explain_worker_exit(code: int) -> str:
+    unsigned = code & 0xFFFFFFFF
+    if unsigned == _ACCESS_VIOLATION or code == -1073741819:
+        return (
+            "Transcription crashed inside Whisper/CTranslate2 (Windows access violation). "
+            "Try Settings → Whisper model `tiny` or `base`, set compute type to `float32`, "
+            "or reinstall with `uv pip install --reinstall ctranslate2 faster-whisper`."
+        )
+    return f"Pipeline worker exited unexpectedly (code {code})."
 
 
 #: Process-wide queue.

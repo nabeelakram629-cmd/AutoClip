@@ -8,6 +8,7 @@ trim-handle snapping all derive from it.
 from __future__ import annotations
 
 import logging
+import wave
 from collections.abc import Callable
 from pathlib import Path
 
@@ -82,6 +83,19 @@ def _model_load_error(exc: Exception, device: str, compute_type: str) -> Transcr
     return TranscriptionError(f"Could not load the Whisper model: {message}")
 
 
+def _load_pcm16_wav(path: Path):
+    """Read a 16-bit WAV as float32 samples in -1..1, as Whisper expects."""
+    import numpy as np
+
+    with wave.open(str(path), "rb") as handle:
+        channels = handle.getnchannels()
+        frames = handle.readframes(handle.getnframes())
+    samples = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
+    if channels > 1:
+        samples = samples.reshape(-1, channels).mean(axis=1)
+    return samples
+
+
 def transcribe(
     audio: Path,
     settings: WhisperSettings | None = None,
@@ -120,18 +134,24 @@ def transcribe(
     )
 
     try:
-        model = WhisperModel(settings.model, device=device, compute_type=compute_type)
+        model = WhisperModel(
+            settings.model,
+            device=device,
+            compute_type=compute_type,
+            cpu_threads=1 if device == "cpu" else 4,
+        )
     except Exception as exc:
         raise _model_load_error(exc, device, compute_type) from exc
 
+    # Pass PCM samples instead of a path. faster-whisper's PyAV decoder uses
+    # ``metadata_errors=``, which some av builds don't accept and then crash
+    # the stage before Whisper even starts.
     segments_iter, info = model.transcribe(
-        str(audio),
+        _load_pcm16_wav(audio),
         language=settings.language or None,
         word_timestamps=True,
-        vad_filter=True,
-        # Trims long silences before decoding, which both speeds things up and
-        # stops Whisper hallucinating text into empty audio.
-        vad_parameters={"min_silence_duration_ms": 500},
+        # Silero VAD (onnxruntime) ACCESS_VIOLATEs on some Windows CPU setups.
+        vad_filter=False,
     )
 
     total = duration_s or getattr(info, "duration", 0.0) or 0.0
