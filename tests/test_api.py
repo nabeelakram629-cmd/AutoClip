@@ -203,6 +203,20 @@ class TestJobs:
 
         assert response.json()["provider"] == "ollama"
 
+    def test_burn_captions_override_is_stored(self, client: TestClient, source: Source) -> None:
+        response = client.post(
+            "/api/jobs",
+            json={
+                "source_id": source.id,
+                "settings": {"burn_captions": False},
+            },
+        )
+
+        assert response.status_code == 201
+        job = store.get_job(response.json()["id"])
+        assert job is not None
+        assert job.settings["export"]["burn_captions"] is False
+
     def test_missing_source_is_404(self, client: TestClient) -> None:
         response = client.post("/api/jobs", json={"source_id": "nope"})
 

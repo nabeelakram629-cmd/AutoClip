@@ -30,6 +30,7 @@ export function Review() {
   const [savingWords, setSavingWords] = useState(false)
   const [exporting, setExporting] = useState<Set<string>>(new Set())
   const [error, setError] = useState<Error | null>(null)
+  const [burnCaptions, setBurnCaptions] = useState(true)
 
   useEffect(() => {
     if (!jobId) return
@@ -118,7 +119,7 @@ export function Review() {
     setExporting((current) => new Set(current).add(clip.id))
     setError(null)
     try {
-      await api.exportClip(clip.id, clip.ratio, clip.caption_style)
+      await api.exportClip(clip.id, clip.ratio, clip.caption_style, false, burnCaptions)
       patchClip(await api.getClip(clip.id))
     } catch (err) {
       setError(err as Error)
@@ -213,7 +214,7 @@ export function Review() {
                   startS={selected.start_s}
                   endS={selected.end_s}
                   words={words}
-                  style={activeStyle}
+                  style={burnCaptions ? activeStyle : undefined}
                   ratio={selected.ratio}
                   cropPath={cropPath}
                 />
@@ -257,12 +258,40 @@ export function Review() {
                 />
 
                 <div>
+                  <p className="eyebrow border-b border-ink-800 pb-2">Captions</p>
+                  <div className="mt-3 grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setBurnCaptions(true)}
+                      className={['btn', burnCaptions ? 'btn-primary' : 'btn-ghost'].join(' ')}
+                      aria-pressed={burnCaptions}
+                    >
+                      With captions
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setBurnCaptions(false)}
+                      className={['btn', !burnCaptions ? 'btn-primary' : 'btn-ghost'].join(' ')}
+                      aria-pressed={!burnCaptions}
+                    >
+                      Without captions
+                    </button>
+                  </div>
+                  <p className="mt-2 text-xs text-ink-500">
+                    {burnCaptions
+                      ? 'Subtitles will be burned into the exported file.'
+                      : 'The export will have no text overlay.'}
+                  </p>
+                </div>
+
+                <div className={burnCaptions ? '' : 'opacity-40'}>
                   <p className="eyebrow border-b border-ink-800 pb-2">Caption style</p>
                   <div className="mt-3 space-y-1">
                     {styles.map((style) => (
                       <button
                         key={style.key}
-                        onClick={() => setStyle(selected, style.key)}
+                        onClick={() => burnCaptions && setStyle(selected, style.key)}
+                        disabled={!burnCaptions}
                         className={[
                           'block w-full border-l-2 py-2 pl-3 text-left transition-colors duration-200',
                           style.key === selected.caption_style

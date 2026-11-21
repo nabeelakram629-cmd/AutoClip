@@ -11,7 +11,7 @@ const STAGES = [
   { key: 'transcribe', label: 'Transcribe', note: 'Word-level timing' },
   { key: 'highlights', label: 'Highlights', note: 'Choosing the moments worth cutting' },
   { key: 'reframe', label: 'Reframe', note: 'Tracking the speaker into vertical' },
-  { key: 'captions', label: 'Captions', note: 'Building subtitle timing' },
+  { key: 'captions', label: 'Captions', note: 'Building subtitle timing (skipped if off)' },
   { key: 'export', label: 'Export', note: 'Rendering clips' },
 ] as const
 

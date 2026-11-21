@@ -211,6 +211,7 @@ async def export_clip(clip_id: str, payload: ExportRequestIn) -> ExportOut:
         words=words,
         style=style,
         ratio=payload.ratio,
+        burn_captions=payload.burn_captions,
     )
 
     try:

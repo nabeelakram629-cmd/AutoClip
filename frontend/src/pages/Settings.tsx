@@ -258,6 +258,24 @@ export function Settings() {
           </span>
         </label>
 
+        <label className="mt-5 flex items-start gap-3 text-sm text-ink-200">
+          <input
+            type="checkbox"
+            checked={settings.export.burn_captions !== false}
+            onChange={(e) =>
+              patch({ export: { ...settings.export, burn_captions: e.target.checked } })
+            }
+            className="mt-0.5 size-4 accent-sodium-500"
+          />
+          <span>
+            Burn captions into exported clips
+            <span className="mt-1 block text-xs text-ink-500">
+              Turn this off for a clean cut with no text overlay. You can still change it
+              per job on the New page.
+            </span>
+          </span>
+        </label>
+
         <label className="mt-4 flex items-center gap-3 text-sm text-ink-200">
           <input
             type="checkbox"

@@ -416,6 +416,11 @@ def clip(
     centre_crop: bool = typer.Option(
         False, "--centre-crop", help="Skip face tracking and centre-crop everything."
     ),
+    captions: bool = typer.Option(
+        True,
+        "--captions/--no-captions",
+        help="Burn captions into the exported clips.",
+    ),
 ) -> None:
     """Turn a video into captioned vertical clips."""
     import asyncio
@@ -442,6 +447,7 @@ def clip(
         settings.whisper.diarization = True
     if centre_crop:
         settings.export.__dict__["centre_crop"] = True
+    settings.export.burn_captions = captions
 
     # --- ingest ---------------------------------------------------------
     try:
