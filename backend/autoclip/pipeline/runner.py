@@ -33,6 +33,16 @@ from .transcript import Transcript
 
 log = logging.getLogger(__name__)
 
+
+def _settings_for_job(job: Job) -> Settings:
+    """Use the settings snapshot stored on the job, falling back to disk."""
+    if job.settings:
+        try:
+            return Settings.model_validate(job.settings)
+        except Exception:
+            log.warning("Job %s has unreadable settings; using current config.", job.id)
+    return load_settings()
+
 #: Weight of each stage in the overall progress bar. Rough proportions of wall
 #: time on a mid-range machine — transcription and export dominate.
 STAGE_WEIGHTS: dict[Stage, float] = {
@@ -115,7 +125,7 @@ class PipelineRunner:
     ) -> None:
         self.job = job
         self.source = source
-        self.settings = settings or load_settings()
+        self.settings = settings or _settings_for_job(job)
         self.on_progress = on_progress
         self._is_cancelled = is_cancelled or (lambda: False)
         self.workspace = JobWorkspace(job.id)
@@ -341,6 +351,10 @@ class PipelineRunner:
     def _stage_captions(self, clips: list[Clip], transcript: Transcript) -> None:
         stage = Stage.CAPTIONS
         self._check_cancelled()
+        if not self.settings.export.burn_captions:
+            self._emit(stage, 1.0, "Captions skipped")
+            self._finish_stage(stage)
+            return
         # Caption files are written during export, where the output dimensions
         # are known. This stage validates the style so a typo fails fast rather
         # than after the reframe work is already done.
@@ -358,6 +372,8 @@ class PipelineRunner:
 
         style = captions.get_style(self.settings.export.caption_style)
         ratio = self.settings.export.ratio
+        if not self.settings.export.burn_captions:
+            log.info("Exporting job %s without burned-in captions.", self.job.id)
         source_path = Path(self.source.path)
         destination_dir = paths.exports_dir() / self.job.id
         destination_dir.mkdir(parents=True, exist_ok=True)
@@ -380,6 +396,7 @@ class PipelineRunner:
                 words=words,
                 style=style,
                 ratio=ratio,
+                burn_captions=self.settings.export.burn_captions,
             )
 
             def clip_progress(fraction: float, i: int = index) -> None:

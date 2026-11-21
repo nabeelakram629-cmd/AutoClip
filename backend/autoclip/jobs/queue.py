@@ -103,7 +103,9 @@ class JobQueue:
             return False
 
         self._cancel_requested.add(job_id)
-        _cancel_flag(job_id).write_text("1", encoding="utf-8")
+        flag = _cancel_flag(job_id)
+        flag.parent.mkdir(parents=True, exist_ok=True)
+        flag.write_text("1", encoding="utf-8")
         if job.status == "queued":
             store.update_job(job_id, status="cancelled")
             broker.publish(Event(type="cancelled", job_id=job_id))

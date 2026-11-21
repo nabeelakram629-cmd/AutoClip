@@ -40,6 +40,8 @@ def _apply_overrides(settings, overrides: JobSettingsIn):
         merged.clips.max_clips = overrides.max_clips
     if overrides.caption_style:
         merged.export.caption_style = overrides.caption_style
+    if overrides.burn_captions is not None:
+        merged.export.burn_captions = overrides.burn_captions
     if overrides.ratio:
         merged.export.ratio = overrides.ratio
 

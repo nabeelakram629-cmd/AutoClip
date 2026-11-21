@@ -67,6 +67,7 @@ class JobSettingsIn(BaseModel):
     max_duration_s: float | None = Field(default=None, gt=0)
     max_clips: int | None = Field(default=None, ge=1, le=50)
     caption_style: str | None = None
+    burn_captions: bool | None = None
     ratio: Literal["9:16", "1:1", "16:9"] | None = None
 
 
@@ -203,6 +204,7 @@ class ExportRequestIn(BaseModel):
     ratio: Literal["9:16", "1:1", "16:9"] = "9:16"
     style: str = "bold_pop"
     write_srt: bool = False
+    burn_captions: bool = True
 
 
 class CaptionStyleOut(BaseModel):

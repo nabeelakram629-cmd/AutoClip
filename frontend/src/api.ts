@@ -142,6 +142,7 @@ export interface Settings {
   export: {
     ratio: string
     caption_style: string
+    burn_captions: boolean
     loudness_lufs: number
     prefer_hardware_encoder: boolean
     crf: number
@@ -173,6 +174,7 @@ export interface JobSettingsOverrides {
   max_duration_s?: number
   max_clips?: number
   caption_style?: string
+  burn_captions?: boolean
   ratio?: string
 }
 
@@ -273,10 +275,21 @@ export const api = {
       body: JSON.stringify(patch),
     }),
 
-  exportClip: (clipId: string, ratio: string, style: string, writeSrt = false) =>
+  exportClip: (
+    clipId: string,
+    ratio: string,
+    style: string,
+    writeSrt = false,
+    burnCaptions = true,
+  ) =>
     request<ExportRecord>(`/api/clips/${clipId}/export`, {
       method: 'POST',
-      body: JSON.stringify({ ratio, style, write_srt: writeSrt }),
+      body: JSON.stringify({
+        ratio,
+        style,
+        write_srt: writeSrt,
+        burn_captions: burnCaptions,
+      }),
     }),
 
   captionStyles: () => request<CaptionStyle[]>('/api/caption-styles'),

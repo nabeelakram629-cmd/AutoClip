@@ -18,7 +18,7 @@ export function Ingest() {
   const [error, setError] = useState<ApiError | Error | null>(null)
   const [jobs, setJobs] = useState<Job[]>([])
   const [providers, setProviders] = useState<ProviderStatus[]>([])
-  const [overrides, setOverrides] = useState<JobSettingsOverrides>({})
+  const [overrides, setOverrides] = useState<JobSettingsOverrides>({ burn_captions: true })
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [dragging, setDragging] = useState(false)
   const fileInput = useRef<HTMLInputElement>(null)
@@ -26,6 +26,15 @@ export function Ingest() {
   useEffect(() => {
     api.listJobs(8).then(setJobs).catch(() => undefined)
     api.providerStatus().then(setProviders).catch(() => undefined)
+    api
+      .getSettings()
+      .then((settings) => {
+        setOverrides((current) => ({
+          ...current,
+          burn_captions: settings.export.burn_captions !== false,
+        }))
+      })
+      .catch(() => undefined)
   }, [])
 
   const start = useCallback(
@@ -154,6 +163,14 @@ export function Ingest() {
             }}
           />
         </section>
+      </div>
+
+      <div className="max-w-3xl">
+        <CaptionToggle
+          value={overrides.burn_captions !== false}
+          onChange={(on) => setOverrides((current) => ({ ...current, burn_captions: on }))}
+          disabled={busy !== null}
+        />
       </div>
 
       {busy && (
@@ -290,6 +307,18 @@ function AdvancedOptions({
                 onChange={(v) => set('max_duration_s', v)}
               />
             </div>
+            <Selector
+              label="Caption style"
+              value={overrides.caption_style ?? ''}
+              onChange={(v) => set('caption_style', v || undefined)}
+              options={[
+                { value: '', label: 'Use default' },
+                { value: 'bold_pop', label: 'Bold pop' },
+                { value: 'karaoke_fill', label: 'Karaoke fill' },
+                { value: 'clean_lower', label: 'Clean lower' },
+                { value: 'boxed', label: 'Boxed' },
+              ]}
+            />
             <label className="flex items-center gap-3 text-sm text-ink-200 sm:col-span-2">
               <input
                 type="checkbox"
@@ -303,6 +332,45 @@ function AdvancedOptions({
         </div>
       </div>
     </div>
+  )
+}
+
+function CaptionToggle({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: boolean
+  onChange: (value: boolean) => void
+  disabled?: boolean
+}) {
+  return (
+    <fieldset className="mt-8" disabled={disabled}>
+      <legend className="eyebrow">Captions</legend>
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        <button
+          type="button"
+          onClick={() => onChange(true)}
+          className={['btn w-full', value ? 'btn-primary' : 'btn-ghost'].join(' ')}
+          aria-pressed={value}
+        >
+          With captions
+        </button>
+        <button
+          type="button"
+          onClick={() => onChange(false)}
+          className={['btn w-full', !value ? 'btn-primary' : 'btn-ghost'].join(' ')}
+          aria-pressed={!value}
+        >
+          Without captions
+        </button>
+      </div>
+      <p className="mt-2 text-xs leading-relaxed text-ink-500">
+        {value
+          ? 'Burn animated subtitles into the exported clips.'
+          : 'Export a clean cut with no text overlay.'}
+      </p>
+    </fieldset>
   )
 }
 
